@@ -27,11 +27,16 @@
 
 #include "QDjango.h"
 
-static const char *connectionPrefix = "_qdjango_";
+static const char *defaultConnectionPrefix = "_qdjango_";
 
 QMap<QByteArray, QDjangoMetaModel> globalMetaModels = QMap<QByteArray, QDjangoMetaModel>();
+QMap<QByteArray, QDjangoDatabase*> globalModelDbMap = QMap<QByteArray, QDjangoDatabase*>();
 static QDjangoDatabase *globalDatabase = 0;
-static QDjangoDatabase::DatabaseType globalDatabaseType = QDjangoDatabase::UnknownDB;
+// contains the types of all database connections registered wich QDjango::initDatabase(), also thread specific DBs
+QMap<QString, QDjangoDatabase::DatabaseType> globalDatabaseTypeMap = QMap<QString, QDjangoDatabase::DatabaseType>();
+// contains the QDjangoDatabase object associated with the main connections associated with models
+// the globalDatabase and all the thread specific connections are missing
+QMap<QString, QDjangoDatabase*> globalConnectionDbMap = QMap<QString, QDjangoDatabase*>();
 static bool globalDebugEnabled = false;
 
 /// \cond
@@ -52,13 +57,15 @@ void QDjangoDatabase::threadFinished()
     disconnect(thread, SIGNAL(finished()), this, SLOT(threadFinished()));
     const QString connectionName = copies.value(thread).connectionName();
     copies.remove(thread);
-    if (connectionName.startsWith(QLatin1String(connectionPrefix)))
+    const QString connectionPrefix = getConnectionPrefix();
+    if (connectionName.startsWith(connectionPrefix))
         QSqlDatabase::removeDatabase(connectionName);
 }
 
 static void closeDatabase()
 {
     delete globalDatabase;
+    qDeleteAll(globalModelDbMap);
 }
 
 static QDjangoDatabase::DatabaseType getDatabaseType(QSqlDatabase &db)
@@ -93,13 +100,14 @@ static QDjangoDatabase::DatabaseType getDatabaseType(QSqlDatabase &db)
 
 static void initDatabase(QSqlDatabase db)
 {
-    QDjangoDatabase::DatabaseType databaseType = QDjangoDatabase::databaseType(db);
+    QDjangoDatabase::DatabaseType databaseType = getDatabaseType(db);
     if (databaseType == QDjangoDatabase::SQLite) {
         // enable foreign key constraint handling
         QDjangoQuery query(db);
         query.prepare("PRAGMA foreign_keys=on");
         query.exec();
     }
+    globalDatabaseTypeMap.insert(db.connectionName(), databaseType);
 }
 
 QDjangoQuery::QDjangoQuery(QSqlDatabase db)
@@ -154,6 +162,39 @@ bool QDjangoQuery::exec(const QString &query)
 
 /// \endcond
 
+QString QDjangoDatabase::getConnectionPrefix()
+{
+  QString prefix = reference.connectionName();
+  if (prefix.isEmpty())
+    { // the database is the default database, use the default prefix
+      prefix = QLatin1String(defaultConnectionPrefix);
+    }
+  return prefix;
+}
+
+QSqlDatabase QDjango::databaseForThread(QDjangoDatabase *database)
+{
+  // if we are in the main thread, return reference connection
+  QThread *thread = QThread::currentThread();
+  if (thread == database->thread())
+      return database->reference;
+
+  // if we have a connection for this thread, return it
+  QMutexLocker locker(&database->mutex);
+  if (database->copies.contains(thread))
+      return database->copies[thread];
+
+  // create a new connection for this thread
+  QObject::connect(thread, SIGNAL(finished()), database, SLOT(threadFinished()));
+  QString connectionPrefix = database->getConnectionPrefix();
+  QSqlDatabase db = QSqlDatabase::cloneDatabase(database->reference,
+      connectionPrefix + QString::number(database->connectionId++));
+  db.open();
+  initDatabase(db);
+  database->copies.insert(thread, db);
+  return db;
+}
+
 /*!
     Returns the database used by QDjango.
 
@@ -163,29 +204,25 @@ bool QDjangoQuery::exec(const QString &query)
 
     \sa setDatabase()
 */
-QSqlDatabase QDjango::database()
+QSqlDatabase QDjango::database(QByteArray modelName)
+{
+  QDjangoDatabase* database;
+  if (globalModelDbMap.contains(modelName))
+    {
+      database = globalModelDbMap[modelName];
+    }
+  else
+    {
+      database = globalDatabase;
+    }
+
+  if (!database)
 {
     if (!globalDatabase)
         return QSqlDatabase();
+    }
 
-    // if we are in the main thread, return reference connection
-    QThread *thread = QThread::currentThread();
-    if (thread == globalDatabase->thread())
-        return globalDatabase->reference;
-
-    // if we have a connection for this thread, return it
-    QMutexLocker locker(&globalDatabase->mutex);
-    if (globalDatabase->copies.contains(thread))
-        return globalDatabase->copies[thread];
-
-    // create a new connection for this thread
-    QObject::connect(thread, SIGNAL(finished()), globalDatabase, SLOT(threadFinished()));
-    QSqlDatabase db = QSqlDatabase::cloneDatabase(globalDatabase->reference,
-        QLatin1String(connectionPrefix) + QString::number(globalDatabase->connectionId++));
-    db.open();
-    initDatabase(db);
-    globalDatabase->copies.insert(thread, db);
-    return db;
+  return databaseForThread(database);
 }
 
 /*!
@@ -197,8 +234,8 @@ QSqlDatabase QDjango::database()
 */
 void QDjango::setDatabase(QSqlDatabase database)
 {
-    globalDatabaseType = getDatabaseType(database);
-    if (globalDatabaseType == QDjangoDatabase::UnknownDB) {
+    QDjangoDatabase::DatabaseType databaseType = getDatabaseType(database);
+    if (databaseType == QDjangoDatabase::UnknownDB) {
         qWarning() << "Unsupported database driver" << database.driverName();
     }
 
@@ -209,6 +246,44 @@ void QDjango::setDatabase(QSqlDatabase database)
     }
     initDatabase(database);
     globalDatabase->reference = database;
+}
+
+void QDjango::setDatabaseForModel(QSqlDatabase databaseConn, QByteArray modelName)
+{
+  QDjangoDatabase::DatabaseType databaseType = getDatabaseType(databaseConn);
+  if (databaseType == QDjangoDatabase::UnknownDB) {
+      qWarning() << "Unsupported database driver" << databaseConn.driverName();
+  }
+
+  if (globalModelDbMap.contains(modelName))
+    {
+      // model was already assigned to a db
+      if (globalModelDbMap[modelName]->reference.connectionName() != databaseConn.connectionName())
+        {
+          // but it seems to be a different connection, so remove it assign a new one
+          globalModelDbMap.remove(modelName);
+        }
+    }
+
+  if (!globalModelDbMap.contains(modelName))
+    {
+      // the QDjangoDatabase is not yet known for this model
+      const QString connectionName = databaseConn.connectionName();
+      if (!globalConnectionDbMap.contains(connectionName))
+        {
+          // there is no QDjangoDatabase object yet assigned to the connection
+          QDjangoDatabase *database = new QDjangoDatabase();
+          qAddPostRoutine(closeDatabase);
+          initDatabase(databaseConn);
+          database->reference = databaseConn;
+          globalConnectionDbMap[connectionName] = database;
+        }
+      globalModelDbMap[modelName] = globalConnectionDbMap[connectionName];
+    }
+  else
+    {
+      // TODO close DB or warn?
+    }
 }
 
 /*!
@@ -313,16 +388,24 @@ QDjangoMetaModel QDjango::metaModel(const char *name)
     return QDjangoMetaModel();
 }
 
-QDjangoMetaModel QDjango::registerModel(const QMetaObject *meta)
+QDjangoMetaModel QDjango::registerModel(const QMetaObject *meta, QSqlDatabase database)
 {
     const QByteArray name = meta->className();
     if (!globalMetaModels.contains(name))
+      {
         globalMetaModels.insert(name, QDjangoMetaModel(meta));
+      }
+    if (database.isValid())
+      {
+        setDatabaseForModel(database, name);
+      }
+
     return globalMetaModels[name];
 }
 
 QDjangoDatabase::DatabaseType QDjangoDatabase::databaseType(const QSqlDatabase &db)
 {
-    Q_UNUSED(db);
-    return globalDatabaseType;
+//    Q_UNUSED(db);
+//    return globalDatabaseType;
+  return globalDatabaseTypeMap.value(db.connectionName(), QDjangoDatabase::UnknownDB);
 }

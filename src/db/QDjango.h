@@ -37,17 +37,19 @@ public:
     static bool createTables();
     static bool dropTables();
 
-    static QSqlDatabase database();
+    static QSqlDatabase databaseForThread(QDjangoDatabase *database);
+    static QSqlDatabase database(QByteArray modelName = QByteArray());
     static void setDatabase(QSqlDatabase database);
+    static void setDatabaseForModel(QSqlDatabase database, QByteArray modelName);
 
     static bool isDebugEnabled();
     static void setDebugEnabled(bool enabled);
 
     template <class T>
-    static QDjangoMetaModel registerModel();
+    static QDjangoMetaModel registerModel(QSqlDatabase database = QSqlDatabase());
 
 private:
-    static QDjangoMetaModel registerModel(const QMetaObject *meta);
+    static QDjangoMetaModel registerModel(const QMetaObject *meta, QSqlDatabase database);
     static QDjangoMetaModel metaModel(const char *name);
 
     friend class QDjangoCompiler;
@@ -59,9 +61,9 @@ private:
 /** Register a QDjangoModel class with QDjango.
  */
 template <class T>
-QDjangoMetaModel QDjango::registerModel()
+QDjangoMetaModel QDjango::registerModel(QSqlDatabase database)
 {
-    return registerModel(&T::staticMetaObject);
+    return registerModel(&T::staticMetaObject, database);
 }
 
 #endif

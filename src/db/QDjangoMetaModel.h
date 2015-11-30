@@ -89,6 +89,8 @@ public:
     QByteArray primaryKey() const;
     QString table() const;
 
+    QSqlDatabase database() const;
+
 private:
     QSharedDataPointer<QDjangoMetaModelPrivate> d;
 };

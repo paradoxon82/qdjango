@@ -424,7 +424,7 @@ QDjangoMetaModel& QDjangoMetaModel::operator=(const QDjangoMetaModel& other)
 */
 bool QDjangoMetaModel::createTable() const
 {
-    QDjangoQuery createQuery(QDjango::database());
+    QDjangoQuery createQuery(this->database());
     foreach (const QString &sql, createTableSql()) {
         if (!createQuery.exec(sql))
             return false;
@@ -438,7 +438,7 @@ bool QDjangoMetaModel::createTable() const
 */
 QStringList QDjangoMetaModel::createTableSql() const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = this->database();
     QSqlDriver *driver = db.driver();
     QDjangoDatabase::DatabaseType databaseType = QDjangoDatabase::databaseType(db);
 
@@ -649,7 +649,7 @@ QStringList QDjangoMetaModel::createTableSql() const
 */
 bool QDjangoMetaModel::dropTable() const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = this->database();
     if (!db.tables().contains(d->table))
         return true;
 
@@ -791,6 +791,15 @@ QString QDjangoMetaModel::table() const
 }
 
 /*!
+ *   Returns the database associated with the model,
+ *   if there is no database directly assigned, returns the global one
+ */
+QSqlDatabase QDjangoMetaModel::database() const
+{
+    return QDjango::database(QDjango::stripNamespace(d->className));
+}
+
+/*!
     Removes the given \a model instance from the database.
 */
 bool QDjangoMetaModel::remove(QObject *model) const
@@ -813,7 +822,7 @@ bool QDjangoMetaModel::save(QObject *model) const
     const QVariant pk = model->property(d->primaryKey);
     if (!pk.isNull() && !(primaryKey.d->type == QVariant::Int && !pk.toInt()))
     {
-        QSqlDatabase db = QDjango::database();
+        QSqlDatabase db = this->database();
         QDjangoQuery query(db);
         query.prepare(QString::fromLatin1("SELECT 1 AS a FROM %1 WHERE %2 = ?").arg(
                       db.driver()->escapeIdentifier(d->table, QSqlDriver::FieldName),

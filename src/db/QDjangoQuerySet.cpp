@@ -147,7 +147,7 @@ QString QDjangoCompiler::fromSql()
     return from;
 }
 
-QString QDjangoCompiler::orderLimitSql(const QStringList &orderBy, int lowMark, int highMark)
+QString QDjangoCompiler::orderLimitSql(const QStringList &orderBy, int lowMark, int highMark, const QByteArray &modelName)
 {
     QString limit;
 
@@ -170,7 +170,7 @@ QString QDjangoCompiler::orderLimitSql(const QStringList &orderBy, int lowMark, 
 
     // limits
     QDjangoDatabase::DatabaseType databaseType =
-        QDjangoDatabase::databaseType(QDjango::database());
+        QDjangoDatabase::databaseType(QDjango::database(modelName));
 
     if (databaseType == QDjangoDatabase::MSSqlServer) {
         if (limit.isEmpty() && (highMark > 0 || lowMark > 0))
@@ -297,7 +297,7 @@ bool QDjangoQuerySetPrivate::sqlInsert(const QVariantMap &fields, QVariant *inse
 
     // fetch autoincrement pk
     if (insertId) {
-        QSqlDatabase db = QDjango::database();
+        QSqlDatabase db = QDjango::database(m_modelName);
         QDjangoDatabase::DatabaseType databaseType = QDjangoDatabase::databaseType(db);
 
         if (databaseType == QDjangoDatabase::PostgreSQL) {
@@ -343,7 +343,7 @@ bool QDjangoQuerySetPrivate::sqlLoad(QObject *model, int index)
  */
 QDjangoQuery QDjangoQuerySetPrivate::countQuery() const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = QDjango::database(m_modelName);
 
     // build query
     QDjangoCompiler compiler(m_modelName, db);
@@ -351,7 +351,7 @@ QDjangoQuery QDjangoQuerySetPrivate::countQuery() const
     compiler.resolve(resolvedWhere);
 
     const QString where = resolvedWhere.sql(db);
-    const QString limit = compiler.orderLimitSql(QStringList(), lowMark, highMark);
+    const QString limit = compiler.orderLimitSql(QStringList(), lowMark, highMark, m_modelName);
     QString sql = QLatin1String("SELECT COUNT(*) FROM ") + compiler.fromSql();
     if (!where.isEmpty())
         sql += QLatin1String(" WHERE ") + where;
@@ -367,7 +367,7 @@ QDjangoQuery QDjangoQuerySetPrivate::countQuery() const
  */
 QDjangoQuery QDjangoQuerySetPrivate::deleteQuery() const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = QDjango::database(m_modelName);
 
     // build query
     QDjangoCompiler compiler(m_modelName, db);
@@ -375,7 +375,7 @@ QDjangoQuery QDjangoQuerySetPrivate::deleteQuery() const
     compiler.resolve(resolvedWhere);
 
     const QString where = resolvedWhere.sql(db);
-    const QString limit = compiler.orderLimitSql(orderBy, lowMark, highMark);
+    const QString limit = compiler.orderLimitSql(orderBy, lowMark, highMark, m_modelName);
     QString sql = QLatin1String("DELETE FROM ") + compiler.fromSql();
     if (!where.isEmpty())
         sql += QLatin1String(" WHERE ") + where;
@@ -391,7 +391,7 @@ QDjangoQuery QDjangoQuerySetPrivate::deleteQuery() const
  */
 QDjangoQuery QDjangoQuerySetPrivate::insertQuery(const QVariantMap &fields) const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = QDjango::database(m_modelName);
     const QDjangoMetaModel metaModel = QDjango::metaModel(m_modelName);
 
     // perform INSERT
@@ -416,7 +416,7 @@ QDjangoQuery QDjangoQuerySetPrivate::insertQuery(const QVariantMap &fields) cons
  */
 QDjangoQuery QDjangoQuerySetPrivate::selectQuery() const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = QDjango::database(m_modelName);
 
     // build query
     QDjangoCompiler compiler(m_modelName, db);
@@ -425,7 +425,7 @@ QDjangoQuery QDjangoQuerySetPrivate::selectQuery() const
 
     const QStringList columns = compiler.fieldNames(selectRelated);
     const QString where = resolvedWhere.sql(db);
-    const QString limit = compiler.orderLimitSql(orderBy, lowMark, highMark);
+    const QString limit = compiler.orderLimitSql(orderBy, lowMark, highMark, m_modelName);
     QString sql = QLatin1String("SELECT ") + columns.join(QLatin1String(", ")) + QLatin1String(" FROM ") + compiler.fromSql();
     if (!where.isEmpty())
         sql += QLatin1String(" WHERE ") + where;
@@ -441,7 +441,7 @@ QDjangoQuery QDjangoQuerySetPrivate::selectQuery() const
  */
 QDjangoQuery QDjangoQuerySetPrivate::updateQuery(const QVariantMap &fields) const
 {
-    QSqlDatabase db = QDjango::database();
+    QSqlDatabase db = QDjango::database(m_modelName);
     const QDjangoMetaModel metaModel = QDjango::metaModel(m_modelName);
 
     // build query

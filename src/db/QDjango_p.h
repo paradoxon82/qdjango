@@ -61,6 +61,7 @@ public:
     };
 
     static DatabaseType databaseType(const QSqlDatabase &db);
+    QString getConnectionPrefix();
 
     QSqlDatabase reference;
     QMutex mutex;
